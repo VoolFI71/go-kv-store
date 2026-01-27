@@ -1,13 +1,11 @@
-package main
+package resp
 
 import (
 	"bufio"
 	"fmt"
 	"io"
-	"strconv"
 )
 
-// RESP типы
 const (
 	RESPString     = '+' // Простая строка
 	RESPError      = '-' // Ошибка
@@ -15,8 +13,7 @@ const (
 	RESPArray      = '*' // Массив
 )
 
-// parseInt парсит число из байтового среза
-func parseInt(data []byte) (int, error) {
+func ParseInt(data []byte) (int, error) {
 	if len(data) == 0 {
 		return 0, fmt.Errorf("empty number")
 	}
@@ -66,8 +63,7 @@ func parseInt(data []byte) (int, error) {
 	return result, nil
 }
 
-// parseRESPArray парсит RESP массив команд
-func parseRESPArray(reader *bufio.Reader, buf []byte, args *[]string) error {
+func ParseArray(reader *bufio.Reader, buf []byte, args *[]string) error {
 	line, err := reader.ReadSlice('\n')
 	if err != nil {
 		if err == io.EOF {
@@ -87,7 +83,7 @@ func parseRESPArray(reader *bufio.Reader, buf []byte, args *[]string) error {
 		return fmt.Errorf("invalid RESP array")
 	}
 
-	count, err := parseInt(line[1:])
+	count, err := ParseInt(line[1:])
 	if err != nil {
 		return fmt.Errorf("invalid array count: %v", err)
 	}
@@ -102,7 +98,7 @@ func parseRESPArray(reader *bufio.Reader, buf []byte, args *[]string) error {
 	}
 
 	for i := 0; i < count; i++ {
-		arg, err := parseRESPBulkString(reader, buf)
+		arg, err := ParseBulkString(reader, buf)
 		if err != nil {
 			return err
 		}
@@ -112,11 +108,7 @@ func parseRESPArray(reader *bufio.Reader, buf []byte, args *[]string) error {
 	return nil
 }
 
-// parseRESPBulkString парсит RESP bulk string
-// buf - переиспользуемый буфер для чтения данных
-func parseRESPBulkString(reader *bufio.Reader, buf []byte) (string, error) {
-	// Читаем длину: $N\r\n
-	// ReadSlice возвращает ссылку на данные внутри буфера, без выделения памяти
+func ParseBulkString(reader *bufio.Reader, buf []byte) (string, error) {
 	line, err := reader.ReadSlice('\n')
 	if err != nil {
 		if err == bufio.ErrBufferFull {
@@ -133,7 +125,7 @@ func parseRESPBulkString(reader *bufio.Reader, buf []byte) (string, error) {
 		return "", fmt.Errorf("invalid RESP bulk string")
 	}
 
-	length, err := parseInt(line[1:])
+	length, err := ParseInt(line[1:])
 	if err != nil {
 		return "", fmt.Errorf("invalid bulk string length: %v", err)
 	}
@@ -146,14 +138,11 @@ func parseRESPBulkString(reader *bufio.Reader, buf []byte) (string, error) {
 		return "", fmt.Errorf("negative bulk string length")
 	}
 
-	// Используем переиспользуемый буфер или выделяем новый, если данных слишком много
 	var data []byte
 	neededSize := length + 2
 	if neededSize <= len(buf) {
-		// Используем переиспользуемый буфер
 		data = buf[:neededSize]
 	} else {
-		// Для больших значений выделяем отдельный буфер
 		data = make([]byte, neededSize)
 	}
 
@@ -166,37 +155,59 @@ func parseRESPBulkString(reader *bufio.Reader, buf []byte) (string, error) {
 		return "", fmt.Errorf("invalid bulk string terminator")
 	}
 
+	// ВАЖНО: НЕ используем unsafe здесь!
+	// Буфер переиспользуется между командами, и если мы создадим строку
+	// через unsafe, она будет указывать на буфер, который будет перезаписан
+	// при следующей команде. Это приведет к изменению сохраненных значений в мапе!
+	// Поэтому здесь ОБЯЗАТЕЛЬНО копируем данные через обычный string()
 	return string(data[:length]), nil
 }
 
-// writeRESPString записывает простую строку: +OK\r\n
-func writeRESPString(writer *bufio.Writer, s string) error {
+func WriteString(writer *bufio.Writer, s string) error {
 	writer.WriteByte(RESPString)
 	writer.WriteString(s)
 	writer.WriteString("\r\n")
 	return nil
 }
 
-// writeRESPError записывает ошибку: -ERR message\r\n
-func writeRESPError(writer *bufio.Writer, errMsg string) error {
+func WriteError(writer *bufio.Writer, errMsg string) error {
 	writer.WriteByte(RESPError)
 	writer.WriteString(errMsg)
 	writer.WriteString("\r\n")
 	return nil
 }
 
-// writeRESPBulkString записывает bulk string: $5\r\nvalue\r\n
-func writeRESPBulkString(writer *bufio.Writer, s string) error {
+func WriteBulkString(writer *bufio.Writer, s string) error {
 	writer.WriteByte(RESPBulkString)
-	writer.WriteString(strconv.Itoa(len(s)))
+	writeIntFast(writer, len(s))
 	writer.WriteString("\r\n")
 	writer.WriteString(s)
 	writer.WriteString("\r\n")
 	return nil
 }
 
-// writeRESPNullBulkString записывает null bulk string: $-1\r\n
-func writeRESPNullBulkString(writer *bufio.Writer) error {
+// writeIntFast записывает число напрямую в буфер без создания строки
+func writeIntFast(w *bufio.Writer, n int) {
+	if n == 0 {
+		w.WriteByte('0')
+		return
+	}
+
+	var buf [20]byte // Максимум для int64
+	i := len(buf)
+
+	// Записываем цифры справа налево
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+
+	// Записываем только нужную часть
+	w.Write(buf[i:])
+}
+
+func WriteNullBulkString(writer *bufio.Writer) error {
 	writer.WriteByte(RESPBulkString)
 	writer.WriteString("-1")
 	writer.WriteString("\r\n")

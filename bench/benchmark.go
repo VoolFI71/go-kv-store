@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-
-// BenchmarkResults содержит результаты бенчмарка
 type BenchmarkResults struct {
 	TotalOps      int64
 	Duration      time.Duration
@@ -26,9 +24,7 @@ type BenchmarkResults struct {
 	Errors        int64
 }
 
-// runBenchmarkPipeline запускает бенчмарк с использованием pipeline
-// pipelineSize - размер батча команд (сколько команд отправляется за раз)
-func runBenchmarkPipeline(name string, numOps int, numClients int, pipelineSize int, 
+func runBenchmarkPipeline(name string, numOps int, numClients int, pipelineSize int,
 	setOp func(*BenchmarkClient, int), getOp func(*BenchmarkClient, int)) BenchmarkResults {
 	fmt.Printf("\n=== %s (Pipeline, batch=%d) ===\n", name, pipelineSize)
 	fmt.Printf("Операций: %d, Клиентов: %d\n", numOps, numClients)
@@ -124,13 +120,12 @@ func runBenchmarkPipeline(name string, numOps int, numClients int, pipelineSize 
 
 	opsPerSecond := float64(totalOps) / duration.Seconds()
 
-	// Вычисляем перцентили
 	var p50, p95, p99 time.Duration
 	if len(latencies) > 0 {
 		sorted := make([]int64, len(latencies))
 		copy(sorted, latencies)
 		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-		
+
 		if len(sorted) > 0 {
 			p50 = time.Duration(sorted[len(sorted)*50/100])
 			if len(sorted) > 1 {
@@ -222,14 +217,12 @@ func runBenchmark(name string, numOps int, numClients int, operation func(*Bench
 
 	opsPerSecond := float64(totalOps) / duration.Seconds()
 
-	// Вычисляем перцентили
 	var p50, p95, p99 time.Duration
 	if len(latencies) > 0 {
-		// Сортируем для вычисления перцентилей
 		sorted := make([]int64, len(latencies))
 		copy(sorted, latencies)
 		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-		
+
 		if len(sorted) > 0 {
 			p50 = time.Duration(sorted[len(sorted)*50/100])
 			if len(sorted) > 1 {
@@ -258,7 +251,7 @@ func printResults(results BenchmarkResults) {
 	fmt.Printf("  ✓ Всего операций: %d\n", results.TotalOps)
 	fmt.Printf("  ✗ Ошибок: %d\n", results.Errors)
 	fmt.Printf("  ⏱  Время выполнения: %v\n", results.Duration)
-	fmt.Printf("  🚀 Пропускная способность: %.2f ops/sec (%.2f K ops/sec)\n", 
+	fmt.Printf("  🚀 Пропускная способность: %.2f ops/sec (%.2f K ops/sec)\n",
 		results.OpsPerSecond, results.OpsPerSecond/1000)
 	fmt.Printf("\n  Латентность:\n")
 	fmt.Printf("    Средняя (avg):  %10v\n", results.AvgLatency)
@@ -275,34 +268,29 @@ func main() {
 	fmt.Println("Нажмите Enter для начала...")
 	fmt.Scanln()
 
-	// Тест SET операций (обычный режим)
 	setOp := func(client *BenchmarkClient, idx int) error {
 		key := fmt.Sprintf("bench_key_%d", idx)
 		value := fmt.Sprintf("bench_value_%d", idx)
 		return client.Set(key, value)
 	}
 
-	// Тест GET операций (обычный режим)
 	getOp := func(client *BenchmarkClient, idx int) error {
 		key := fmt.Sprintf("bench_key_%d", idx%10000)
 		_, err := client.Get(key)
 		return err
 	}
 
-	// Pipeline операции SET
 	setOpPipeline := func(client *BenchmarkClient, idx int) {
 		key := fmt.Sprintf("bench_key_%d", idx)
 		value := fmt.Sprintf("bench_value_%d", idx)
 		client.SetPipeline(key, value)
 	}
 
-	// Pipeline операции GET
 	getOpPipeline := func(client *BenchmarkClient, idx int) {
 		key := fmt.Sprintf("bench_key_%d", idx%10000)
 		client.GetPipeline(key)
 	}
 
-	// Заполняем данными для GET тестов
 	fmt.Println("\nПодготовка данных для GET тестов...")
 	prepClient, _ := NewBenchmarkClient("localhost:6379")
 	for i := 0; i < 10000; i++ {
@@ -312,31 +300,24 @@ func main() {
 	}
 	prepClient.Close()
 
-	// Тест 1: SET операции, 1 клиент
 	results1 := runBenchmark("SET (1 клиент, 10000 операций)", 10000, 1, setOp)
 	printResults(results1)
 
-	// Тест 2: SET операции, 10 клиентов
 	results2 := runBenchmark("SET (10 клиентов, 100000 операций)", 100000, 10, setOp)
 	printResults(results2)
 
-	// Тест 3: GET операции, 1 клиент
 	results3 := runBenchmark("GET (1 клиент, 10000 операций)", 10000, 1, getOp)
 	printResults(results3)
 
-	// Тест 4: GET операции, 10 клиентов
 	results4 := runBenchmark("GET (10 клиентов, 100000 операций)", 100000, 10, getOp)
 	printResults(results4)
 
-	// Тест 5: SET операции с pipeline (100 команд в батче)
 	results5 := runBenchmarkPipeline("SET Pipeline", 100000, 10, 100, setOpPipeline, nil)
 	printResults(results5)
 
-	// Тест 6: GET операции с pipeline (100 команд в батче)
 	results6 := runBenchmarkPipeline("GET Pipeline", 100000, 10, 100, nil, getOpPipeline)
 	printResults(results6)
 
-	// Тест 5: Смешанная нагрузка (50% SET, 50% GET)
 	fmt.Printf("\n=== Смешанная нагрузка (50%% SET, 50%% GET) ===\n")
 	fmt.Printf("Операций: 20000, Клиентов: 10\n")
 
@@ -367,12 +348,10 @@ func main() {
 				var err error
 
 				if idx%2 == 0 {
-					// SET операция
 					key := fmt.Sprintf("mixed_key_%d", idx)
 					value := fmt.Sprintf("mixed_value_%d", idx)
 					err = client.Set(key, value)
 				} else {
-					// GET операция
 					key := fmt.Sprintf("bench_key_%d", idx%10000)
 					_, err = client.Get(key)
 				}
@@ -407,7 +386,6 @@ func main() {
 		mixedAvgLatency = time.Duration(mixedLatency / mixedOps)
 	}
 
-	// Вычисляем перцентили для смешанной нагрузки
 	var mixedP50, mixedP95, mixedP99 time.Duration
 	if len(mixedLatencies) > 0 {
 		sort.Slice(mixedLatencies, func(i, j int) bool { return mixedLatencies[i] < mixedLatencies[j] })
@@ -424,7 +402,7 @@ func main() {
 	fmt.Printf("  ✓ Всего операций: %d\n", mixedOps)
 	fmt.Printf("  ✗ Ошибок: %d\n", mixedErrors)
 	fmt.Printf("  ⏱  Время выполнения: %v\n", mixedDuration)
-	fmt.Printf("  🚀 Пропускная способность: %.2f ops/sec (%.2f K ops/sec)\n", 
+	fmt.Printf("  🚀 Пропускная способность: %.2f ops/sec (%.2f K ops/sec)\n",
 		mixedOpsPerSecond, mixedOpsPerSecond/1000)
 	fmt.Printf("\n  Латентность:\n")
 	fmt.Printf("    Средняя (avg):  %10v\n", mixedAvgLatency)

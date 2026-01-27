@@ -10,8 +10,6 @@ const (
 	benchmarkServerAddr = "localhost:6379"
 )
 
-
-// BenchmarkSET измеряет производительность операций SET
 func BenchmarkSET(b *testing.B) {
 	client, err := NewBenchmarkClient(benchmarkServerAddr)
 	if err != nil {
@@ -29,7 +27,6 @@ func BenchmarkSET(b *testing.B) {
 	}
 }
 
-// BenchmarkGET измеряет производительность операций GET
 func BenchmarkGET(b *testing.B) {
 	client, err := NewBenchmarkClient(benchmarkServerAddr)
 	if err != nil {
@@ -37,7 +34,6 @@ func BenchmarkGET(b *testing.B) {
 	}
 	defer client.Close()
 
-	// Сначала заполняем данными
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		value := fmt.Sprintf("value%d", i)
@@ -54,7 +50,6 @@ func BenchmarkGET(b *testing.B) {
 	}
 }
 
-// BenchmarkSETParallel измеряет производительность параллельных SET операций
 func BenchmarkSETParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		client, err := NewBenchmarkClient(benchmarkServerAddr)
@@ -75,9 +70,7 @@ func BenchmarkSETParallel(b *testing.B) {
 	})
 }
 
-// BenchmarkGETParallel измеряет производительность параллельных GET операций
 func BenchmarkGETParallel(b *testing.B) {
-	// Сначала заполняем данными одним клиентом
 	prepClient, err := NewBenchmarkClient(benchmarkServerAddr)
 	if err != nil {
 		b.Fatalf("Не удалось подключиться к серверу: %v", err)

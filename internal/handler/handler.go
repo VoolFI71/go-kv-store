@@ -1,38 +1,13 @@
-//go:build !benchmark
-// +build !benchmark
-
-package main
+package handler
 
 import (
 	"bufio"
-	"fmt"
-	"log"
 	"net"
+	"go-kv-store/internal/resp"
+	"go-kv-store/internal/storage"
 )
 
-func main() {
-	storage := NewShardStorage()
-
-	listener, err := net.Listen("tcp", "0.0.0.0:6379")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer listener.Close()
-
-	fmt.Println("KV Store server started on 0.0.0.0:6379")
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		go handleConn(conn, storage)
-	}
-}
-
-
-func handleConn(conn net.Conn, storage ShardStorage) {
+func HandleConn(conn net.Conn, st storage.Storage) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
@@ -41,12 +16,12 @@ func handleConn(conn net.Conn, storage ShardStorage) {
 	args := make([]string, 0, 16)
 
 	for {
-		err := parseRESPArray(reader, buf, &args)
+		err := resp.ParseArray(reader, buf, &args)
 		if err != nil {
 			if err.Error() == "EOF" {
 				return
 			}
-			writeRESPError(writer, "ERR invalid command format")
+			resp.WriteError(writer, "ERR invalid command format")
 			writer.Flush()
 			continue
 		}
@@ -58,13 +33,13 @@ func handleConn(conn net.Conn, storage ShardStorage) {
 		command := args[0]
 
 		if command == "QUIT" || command == "quit" || command == "EXIT" || command == "exit" {
-			writeRESPString(writer, "OK")
+			resp.WriteString(writer, "OK")
 			writer.Flush()
 			return
 		}
 
 		if len(command) == 0 {
-			writeRESPError(writer, "ERR empty command")
+			resp.WriteError(writer, "ERR empty command")
 			writer.Flush()
 			continue
 		}
@@ -73,12 +48,12 @@ func handleConn(conn net.Conn, storage ShardStorage) {
 		if firstChar == 'S' || firstChar == 's' {
 			if command == "SET" || command == "set" {
 				if len(args) < 3 {
-					writeRESPError(writer, "ERR wrong number of arguments for 'SET' command")
+					resp.WriteError(writer, "ERR wrong number of arguments for 'SET' command")
 				} else {
 					key := args[1]
 					value := args[2]
-					storage.Set(key, value)
-					writeRESPString(writer, "OK")
+					st.Set(key, value)
+					resp.WriteString(writer, "OK")
 				}
 				writer.Flush()
 				continue
@@ -88,14 +63,14 @@ func handleConn(conn net.Conn, storage ShardStorage) {
 		if firstChar == 'G' || firstChar == 'g' {
 			if command == "GET" || command == "get" {
 				if len(args) < 2 {
-					writeRESPError(writer, "ERR wrong number of arguments for 'GET' command")
+					resp.WriteError(writer, "ERR wrong number of arguments for 'GET' command")
 				} else {
 					key := args[1]
-					value, ok := storage.Get(key)
+					value, ok := st.Get(key)
 					if ok {
-						writeRESPBulkString(writer, value)
+						resp.WriteBulkString(writer, value)
 					} else {
-						writeRESPNullBulkString(writer)
+						resp.WriteNullBulkString(writer)
 					}
 				}
 				writer.Flush()
@@ -110,7 +85,7 @@ func handleConn(conn net.Conn, storage ShardStorage) {
 					writer.WriteString("0")
 					writer.WriteString("\r\n")
 				} else {
-					writeRESPError(writer, "ERR wrong number of arguments for 'CONFIG' command")
+					resp.WriteError(writer, "ERR wrong number of arguments for 'CONFIG' command")
 				}
 				writer.Flush()
 				continue
@@ -119,13 +94,13 @@ func handleConn(conn net.Conn, storage ShardStorage) {
 
 		if firstChar == 'P' || firstChar == 'p' {
 			if command == "PING" || command == "ping" {
-				writeRESPString(writer, "PONG")
+				resp.WriteString(writer, "PONG")
 				writer.Flush()
 				continue
 			}
 		}
 
-		writeRESPError(writer, "ERR unknown command '"+command+"'")
+		resp.WriteError(writer, "ERR unknown command '"+command+"'")
 		writer.Flush()
 	}
 }
