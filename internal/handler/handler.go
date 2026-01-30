@@ -2,22 +2,19 @@ package handler
 
 import (
 	"bufio"
-	"go-kv-store/internal/resp"
-	"go-kv-store/internal/storage"
+	"github.com/VoolFI71/go-kv-store/internal/resp"
+	"github.com/VoolFI71/go-kv-store/internal/storage"
 	"net"
 )
 
 func HandleConn(conn net.Conn, st storage.Storage) {
 	defer conn.Close()
-	// Larger buffers matter a lot for pipelining (batch responses can exceed default 4KB).
 	reader := bufio.NewReaderSize(conn, 64*1024)
 	writer := bufio.NewWriterSize(conn, 1024*1024)
 
 	buf := make([]byte, 64*1024)
 	args := make([]string, 0, 32)
 
-	// Max responses to buffer before forcing a flush.
-	// Keep it >= typical pipeline batch size to avoid splitting a batch into multiple flushes.
 	const maxResponsesBeforeFlush = 128
 	responsesSinceFlush := 0
 

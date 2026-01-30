@@ -4,7 +4,6 @@ import (
 	"sync"
 )
 
-// ShardCount must be a power of two to allow fast shard selection via bitmask.
 const ShardCount = 16
 const shardMask = uint32(ShardCount - 1)
 
@@ -30,7 +29,6 @@ func (s Storage) GetShardIndex(key string) uint32 {
 	return fnv1a32String(key) & shardMask
 }
 
-// fnv1a32String computes FNV-1a (32-bit) over a string without allocations.
 func fnv1a32String(s string) uint32 {
 	const (
 		offset32 = 2166136261

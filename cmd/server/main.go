@@ -11,8 +11,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	"go-kv-store/internal/handler"
-	"go-kv-store/internal/storage"
+	"github.com/VoolFI71/go-kv-store/internal/handler"
+	"github.com/VoolFI71/go-kv-store/internal/storage"
 )
 
 func main() {

@@ -329,7 +329,7 @@ func main() {
 		case "get":
 			results := runBenchmarkPipeline("GET Pipeline", *pipelineOps, *pipelineClients, *pipelineBatch, nil, getOpPipeline)
 			printResults(results)
-		default: // "both"
+		default:
 			resultsSet := runBenchmarkPipeline("SET Pipeline", *pipelineOps, *pipelineClients, *pipelineBatch, setOpPipeline, nil)
 			printResults(resultsSet)
 			resultsGet := runBenchmarkPipeline("GET Pipeline", *pipelineOps, *pipelineClients, *pipelineBatch, nil, getOpPipeline)

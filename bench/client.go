@@ -23,7 +23,6 @@ func NewBenchmarkClient(addr string) (*BenchmarkClient, error) {
 	}
 	return &BenchmarkClient{
 		conn: conn,
-		// Larger buffers reduce syscalls for big pipeline batches.
 		reader:  bufio.NewReaderSize(conn, 64*1024),
 		writer:  bufio.NewWriterSize(conn, 64*1024),
 		scratch: make([]byte, 64*1024),
@@ -54,7 +53,6 @@ func (c *BenchmarkClient) Flush() error {
 }
 
 func parseIntLine(data []byte) (int, error) {
-	// Parses an integer from a RESP line suffix like: "123\r\n" or "-1\r\n".
 	if len(data) == 0 {
 		return 0, fmt.Errorf("empty number")
 	}
@@ -93,7 +91,6 @@ func (c *BenchmarkClient) readRESPResponse() (string, error) {
 	line, err := c.reader.ReadSlice('\n')
 	if err != nil {
 		if err == bufio.ErrBufferFull {
-			// Fallback for very long lines (shouldn't happen in our benchmarks).
 			line, err = c.reader.ReadBytes('\n')
 		}
 		return "", err
@@ -133,7 +130,6 @@ func (c *BenchmarkClient) readRESPResponse() (string, error) {
 	}
 }
 
-// skipRESPResponse reads a single RESP response and discards it with minimal allocations.
 func (c *BenchmarkClient) skipRESPResponse() error {
 	line, err := c.reader.ReadSlice('\n')
 	if err != nil {
@@ -165,7 +161,6 @@ func (c *BenchmarkClient) skipRESPResponse() error {
 			_, err = io.ReadFull(c.reader, c.scratch[:need])
 			return err
 		}
-		// Large payload: stream-discard without allocating.
 		_, err = io.CopyN(io.Discard, c.reader, int64(need))
 		return err
 	default:
@@ -200,8 +195,6 @@ func (c *BenchmarkClient) GetPipeline(key string) {
 
 func (c *BenchmarkClient) ReadPipelineResponses(count int) error {
 	for i := 0; i < count; i++ {
-		// In pipeline benchmarks we don't need to materialize values,
-		// so read and discard responses with minimal allocations.
 		if err := c.skipRESPResponse(); err != nil {
 			return err
 		}

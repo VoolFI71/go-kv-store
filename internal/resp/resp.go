@@ -92,8 +92,6 @@ func ParseArray(reader *bufio.Reader, buf []byte, args *[]string) error {
 		return fmt.Errorf("negative array count")
 	}
 
-	// Reuse args backing array when possible.
-	// We set len to count and assign by index to avoid append overhead.
 	if cap(*args) < count {
 		*args = make([]string, count)
 	} else {
@@ -143,8 +141,6 @@ func ParseBulkString(reader *bufio.Reader, buf []byte) (string, error) {
 
 	neededSize := length + 2
 
-	// Fast path: if the whole payload is already buffered, avoid copying it into our scratch buffer.
-	// We still copy into a new string (safe), but skip an extra byte-to-byte copy.
 	if peek, err := reader.Peek(neededSize); err == nil {
 		if peek[length] != '\r' || peek[length+1] != '\n' {
 			return "", fmt.Errorf("invalid bulk string terminator")
@@ -207,17 +203,15 @@ func writeIntFast(w *bufio.Writer, n int) {
 		return
 	}
 
-	var buf [20]byte // Максимум для int64
+	var buf [20]byte
 	i := len(buf)
 
-	// Записываем цифры справа налево
 	for n > 0 {
 		i--
 		buf[i] = byte('0' + n%10)
 		n /= 10
 	}
 
-	// Записываем только нужную часть
 	w.Write(buf[i:])
 }
 
