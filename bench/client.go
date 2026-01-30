@@ -22,7 +22,7 @@ func NewBenchmarkClient(addr string) (*BenchmarkClient, error) {
 		return nil, err
 	}
 	return &BenchmarkClient{
-		conn: conn,
+		conn:    conn,
 		reader:  bufio.NewReaderSize(conn, 64*1024),
 		writer:  bufio.NewWriterSize(conn, 64*1024),
 		scratch: make([]byte, 64*1024),
