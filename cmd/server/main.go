@@ -4,16 +4,32 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 
 	"go-kv-store/internal/handler"
 	"go-kv-store/internal/storage"
 )
 
 func main() {
+	pprofAddr := flag.String("pprof", "localhost:9090", "pprof server address (empty to disable)")
+	flag.Parse()
+
 	st := storage.New()
+
+	if *pprofAddr != "" {
+		go func() {
+			log.Printf("Starting pprof server on %s", *pprofAddr)
+			if err := http.ListenAndServe(*pprofAddr, nil); err != nil {
+				log.Printf("Warning: pprof server failed to start: %v", err)
+			}
+		}()
+	}
+	
 
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {

@@ -1,16 +1,17 @@
 package storage
 
 import (
-	"hash/fnv"
 	"sync"
-	"unsafe"
 )
 
+// ShardCount must be a power of two to allow fast shard selection via bitmask.
 const ShardCount = 16
+const shardMask = uint32(ShardCount - 1)
 
 type Shard struct {
 	mu   sync.RWMutex
 	data map[string]string
+	//_	[64]byte
 }
 
 type Storage []*Shard
@@ -26,19 +27,22 @@ func New() Storage {
 }
 
 func (s Storage) GetShardIndex(key string) uint32 {
-	hash := fnv.New32a()
-	hash.Write(stringToBytesUnsafe(key))
-	return hash.Sum32() % uint32(ShardCount)
+	return fnv1a32String(key) & shardMask
 }
 
-// stringToBytesUnsafe преобразует string → []byte без копирования
-// hash.Write только читает данные, не изменяет их
-func stringToBytesUnsafe(s string) []byte {
-	if len(s) == 0 {
-		return nil
+// fnv1a32String computes FNV-1a (32-bit) over a string without allocations.
+func fnv1a32String(s string) uint32 {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+
+	h := uint32(offset32)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime32
 	}
-	ptr := unsafe.StringData(s)
-	return unsafe.Slice(ptr, len(s))
+	return h
 }
 
 func (s Storage) Set(key, value string) {

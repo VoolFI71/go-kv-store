@@ -4,6 +4,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"sort"
 	"sync"
@@ -12,16 +13,16 @@ import (
 )
 
 type BenchmarkResults struct {
-	TotalOps      int64
-	Duration      time.Duration
-	OpsPerSecond  float64
-	AvgLatency    time.Duration
-	MinLatency    time.Duration
-	MaxLatency    time.Duration
-	P50Latency    time.Duration
-	P95Latency    time.Duration
-	P99Latency    time.Duration
-	Errors        int64
+	TotalOps     int64
+	Duration     time.Duration
+	OpsPerSecond float64
+	AvgLatency   time.Duration
+	MinLatency   time.Duration
+	MaxLatency   time.Duration
+	P50Latency   time.Duration
+	P95Latency   time.Duration
+	P99Latency   time.Duration
+	Errors       int64
 }
 
 func runBenchmarkPipeline(name string, numOps int, numClients int, pipelineSize int,
@@ -263,10 +264,27 @@ func printResults(results BenchmarkResults) {
 }
 
 func main() {
-	fmt.Println("=== KV Store Benchmark ===")
-	fmt.Println("Убедитесь, что сервер запущен на localhost:6379")
-	fmt.Println("Нажмите Enter для начала...")
-	fmt.Scanln()
+	pipelineOnly := flag.Bool("pipeline-only", false, "run only pipeline benchmark(s) (useful for profiling)")
+	pipelineKind := flag.String("pipeline-kind", "both", "pipeline kind: get|set|both")
+	pipelineOps := flag.Int("pipeline-ops", 1000000, "total ops for pipeline benchmark(s)")
+	pipelineClients := flag.Int("pipeline-clients", 10, "number of clients for pipeline benchmark(s)")
+	pipelineBatch := flag.Int("pipeline-batch", 100, "pipeline batch size")
+	startDelaySeconds := flag.Int("start-delay", 0, "sleep N seconds before starting (helps to attach pprof)")
+	flag.Parse()
+
+	if *pipelineOnly {
+		fmt.Println("=== KV Store Benchmark (pipeline only) ===")
+		fmt.Println("Убедитесь, что сервер запущен на localhost:6379")
+		if *startDelaySeconds > 0 {
+			fmt.Printf("Старт через %d секунд...\n", *startDelaySeconds)
+			time.Sleep(time.Duration(*startDelaySeconds) * time.Second)
+		}
+	} else {
+		fmt.Println("=== KV Store Benchmark ===")
+		fmt.Println("Убедитесь, что сервер запущен на localhost:6379")
+		fmt.Println("Нажмите Enter для начала...")
+		fmt.Scanln()
+	}
 
 	setOp := func(client *BenchmarkClient, idx int) error {
 		key := fmt.Sprintf("bench_key_%d", idx)
@@ -291,47 +309,73 @@ func main() {
 		client.GetPipeline(key)
 	}
 
-	fmt.Println("\nПодготовка данных для GET тестов...")
-	prepClient, _ := NewBenchmarkClient("localhost:6379")
-	for i := 0; i < 10000; i++ {
-		key := fmt.Sprintf("bench_key_%d", i)
-		value := fmt.Sprintf("bench_value_%d", i)
-		prepClient.Set(key, value)
+	needPrepForGet := !*pipelineOnly || *pipelineKind == "get" || *pipelineKind == "both"
+	if needPrepForGet {
+		fmt.Println("\nПодготовка данных для GET тестов...")
+		prepClient, _ := NewBenchmarkClient("localhost:6379")
+		for i := 0; i < 10000; i++ {
+			key := fmt.Sprintf("bench_key_%d", i)
+			value := fmt.Sprintf("bench_value_%d", i)
+			prepClient.Set(key, value)
+		}
+		prepClient.Close()
 	}
-	prepClient.Close()
 
-	results1 := runBenchmark("SET (1 клиент, 10000 операций)", 10000, 1, setOp)
+	if *pipelineOnly {
+		switch *pipelineKind {
+		case "set":
+			results := runBenchmarkPipeline("SET Pipeline", *pipelineOps, *pipelineClients, *pipelineBatch, setOpPipeline, nil)
+			printResults(results)
+		case "get":
+			results := runBenchmarkPipeline("GET Pipeline", *pipelineOps, *pipelineClients, *pipelineBatch, nil, getOpPipeline)
+			printResults(results)
+		default: // "both"
+			resultsSet := runBenchmarkPipeline("SET Pipeline", *pipelineOps, *pipelineClients, *pipelineBatch, setOpPipeline, nil)
+			printResults(resultsSet)
+			resultsGet := runBenchmarkPipeline("GET Pipeline", *pipelineOps, *pipelineClients, *pipelineBatch, nil, getOpPipeline)
+			printResults(resultsGet)
+		}
+		fmt.Println("\n=== Benchmark завершен ===")
+		return
+	}
+
+	results1 := runBenchmark("SET (1 клиент, 100000 операций)", 100000, 1, setOp)
 	printResults(results1)
 
 	results2 := runBenchmark("SET (10 клиентов, 100000 операций)", 100000, 10, setOp)
 	printResults(results2)
 
-	results3 := runBenchmark("GET (1 клиент, 10000 операций)", 10000, 1, getOp)
+	results3 := runBenchmark("GET (1 клиент, 1000000 операций)", 1000000, 1, getOp)
 	printResults(results3)
 
-	results4 := runBenchmark("GET (10 клиентов, 100000 операций)", 100000, 10, getOp)
+	results4 := runBenchmark("GET (10 клиентов, 1000000 операций)", 1000000, 10, getOp)
 	printResults(results4)
 
-	results5 := runBenchmarkPipeline("SET Pipeline", 100000, 10, 100, setOpPipeline, nil)
+	results5 := runBenchmarkPipeline("SET Pipeline", 1000000, 10, 100, setOpPipeline, nil)
 	printResults(results5)
 
-	results6 := runBenchmarkPipeline("GET Pipeline", 100000, 10, 100, nil, getOpPipeline)
+	results6 := runBenchmarkPipeline("GET Pipeline", 1000000, 10, 100, nil, getOpPipeline)
 	printResults(results6)
 
 	fmt.Printf("\n=== Смешанная нагрузка (50%% SET, 50%% GET) ===\n")
-	fmt.Printf("Операций: 20000, Клиентов: 10\n")
+	fmt.Printf("Операций: 200000, Клиентов: 10\n")
 
 	var mixedOps int64
 	var mixedErrors int64
 	var mixedLatency int64
 	var mixedMinLatency int64 = 1e18
 	var mixedMaxLatency int64
-	mixedLatencies := make([]int64, 0, 20000)
+	mixedLatencies := make([]int64, 0, 200000)
 	mixedStart := time.Now()
 	var mixedWg sync.WaitGroup
 	var mixedMu sync.Mutex
 
-	for i := 0; i < 10; i++ {
+	const mixedTotalOps = 200000
+	const mixedClients = 10
+	opsPerClient := mixedTotalOps / mixedClients
+	extraOps := mixedTotalOps % mixedClients
+
+	for i := 0; i < mixedClients; i++ {
 		mixedWg.Add(1)
 		go func(clientID int) {
 			defer mixedWg.Done()
@@ -342,8 +386,14 @@ func main() {
 			}
 			defer client.Close()
 
-			for j := 0; j < 1000; j++ {
-				idx := clientID*1000 + j
+			myOps := opsPerClient
+			startIdx := clientID*opsPerClient + min(clientID, extraOps)
+			if clientID < extraOps {
+				myOps++
+			}
+
+			for j := 0; j < myOps; j++ {
+				idx := startIdx + j
 				opStart := time.Now()
 				var err error
 

@@ -2,18 +2,43 @@ package handler
 
 import (
 	"bufio"
-	"net"
 	"go-kv-store/internal/resp"
 	"go-kv-store/internal/storage"
+	"net"
 )
 
 func HandleConn(conn net.Conn, st storage.Storage) {
 	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	writer := bufio.NewWriter(conn)
+	// Larger buffers matter a lot for pipelining (batch responses can exceed default 4KB).
+	reader := bufio.NewReaderSize(conn, 64*1024)
+	writer := bufio.NewWriterSize(conn, 64*1024)
 
 	buf := make([]byte, 64*1024)
-	args := make([]string, 0, 16)
+	args := make([]string, 0, 32)
+
+	// Max responses to buffer before forcing a flush.
+	// Keep it >= typical pipeline batch size to avoid splitting a batch into multiple flushes.
+	const maxResponsesBeforeFlush = 128
+	responsesSinceFlush := 0
+	lastBufferedCheck := 0
+
+	flushIfBatchDone := func() {
+		responsesSinceFlush++
+		// Проверяем буфер только каждые 16 ответов, чтобы снизить overhead
+		// Проверка reader.Buffered() может быть дорогой на Windows из-за системных вызовов
+		if responsesSinceFlush >= maxResponsesBeforeFlush {
+			_ = writer.Flush()
+			responsesSinceFlush = 0
+			lastBufferedCheck = 0
+		} else if responsesSinceFlush-lastBufferedCheck >= 16 {
+			// Проверяем буфер реже, только каждые 16 ответов
+			if reader.Buffered() == 0 {
+				_ = writer.Flush()
+				responsesSinceFlush = 0
+			}
+			lastBufferedCheck = responsesSinceFlush
+		}
+	}
 
 	for {
 		err := resp.ParseArray(reader, buf, &args)
@@ -22,7 +47,8 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 				return
 			}
 			resp.WriteError(writer, "ERR invalid command format")
-			writer.Flush()
+			_ = writer.Flush()
+			responsesSinceFlush = 0
 			continue
 		}
 
@@ -34,13 +60,14 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 
 		if command == "QUIT" || command == "quit" || command == "EXIT" || command == "exit" {
 			resp.WriteString(writer, "OK")
-			writer.Flush()
+			_ = writer.Flush()
+			responsesSinceFlush = 0
 			return
 		}
 
 		if len(command) == 0 {
 			resp.WriteError(writer, "ERR empty command")
-			writer.Flush()
+			flushIfBatchDone()
 			continue
 		}
 
@@ -55,7 +82,7 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 					st.Set(key, value)
 					resp.WriteString(writer, "OK")
 				}
-				writer.Flush()
+				flushIfBatchDone()
 				continue
 			}
 		}
@@ -73,7 +100,7 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 						resp.WriteNullBulkString(writer)
 					}
 				}
-				writer.Flush()
+				flushIfBatchDone()
 				continue
 			}
 		}
@@ -87,7 +114,7 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 				} else {
 					resp.WriteError(writer, "ERR wrong number of arguments for 'CONFIG' command")
 				}
-				writer.Flush()
+				flushIfBatchDone()
 				continue
 			}
 		}
@@ -95,12 +122,12 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 		if firstChar == 'P' || firstChar == 'p' {
 			if command == "PING" || command == "ping" {
 				resp.WriteString(writer, "PONG")
-				writer.Flush()
+				flushIfBatchDone()
 				continue
 			}
 		}
 
 		resp.WriteError(writer, "ERR unknown command '"+command+"'")
-		writer.Flush()
+		flushIfBatchDone()
 	}
 }

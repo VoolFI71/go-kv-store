@@ -10,9 +10,10 @@ import (
 )
 
 type BenchmarkClient struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
+	conn    net.Conn
+	reader  *bufio.Reader
+	writer  *bufio.Writer
+	scratch []byte
 }
 
 func NewBenchmarkClient(addr string) (*BenchmarkClient, error) {
@@ -21,9 +22,11 @@ func NewBenchmarkClient(addr string) (*BenchmarkClient, error) {
 		return nil, err
 	}
 	return &BenchmarkClient{
-		conn:   conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
+		conn: conn,
+		// Larger buffers reduce syscalls for big pipeline batches.
+		reader:  bufio.NewReaderSize(conn, 64*1024),
+		writer:  bufio.NewWriterSize(conn, 64*1024),
+		scratch: make([]byte, 64*1024),
 	}, nil
 }
 
@@ -50,9 +53,49 @@ func (c *BenchmarkClient) Flush() error {
 	return c.writer.Flush()
 }
 
+func parseIntLine(data []byte) (int, error) {
+	// Parses an integer from a RESP line suffix like: "123\r\n" or "-1\r\n".
+	if len(data) == 0 {
+		return 0, fmt.Errorf("empty number")
+	}
+	i := 0
+	neg := false
+	if data[i] == '-' {
+		neg = true
+		i++
+		if i >= len(data) {
+			return 0, fmt.Errorf("no digits after minus")
+		}
+	}
+	n := 0
+	found := false
+	for ; i < len(data); i++ {
+		b := data[i]
+		if b == '\r' || b == '\n' {
+			break
+		}
+		if b < '0' || b > '9' {
+			return 0, fmt.Errorf("invalid digit: %c", b)
+		}
+		found = true
+		n = n*10 + int(b-'0')
+	}
+	if !found {
+		return 0, fmt.Errorf("no digits found")
+	}
+	if neg {
+		return -n, nil
+	}
+	return n, nil
+}
+
 func (c *BenchmarkClient) readRESPResponse() (string, error) {
-	line, err := c.reader.ReadBytes('\n')
+	line, err := c.reader.ReadSlice('\n')
 	if err != nil {
+		if err == bufio.ErrBufferFull {
+			// Fallback for very long lines (shouldn't happen in our benchmarks).
+			line, err = c.reader.ReadBytes('\n')
+		}
 		return "", err
 	}
 
@@ -66,14 +109,20 @@ func (c *BenchmarkClient) readRESPResponse() (string, error) {
 	case '-':
 		return "", fmt.Errorf("server error: %s", string(bytes.TrimSpace(line[1:])))
 	case '$':
-		length, err := strconv.Atoi(string(bytes.TrimSpace(line[1:])))
+		length, err := parseIntLine(line[1:])
 		if err != nil {
 			return "", err
 		}
 		if length == -1 {
 			return "", nil
 		}
-		data := make([]byte, length+2)
+		need := length + 2
+		var data []byte
+		if need <= len(c.scratch) {
+			data = c.scratch[:need]
+		} else {
+			data = make([]byte, need)
+		}
 		_, err = io.ReadFull(c.reader, data)
 		if err != nil {
 			return "", err
@@ -81,6 +130,46 @@ func (c *BenchmarkClient) readRESPResponse() (string, error) {
 		return string(data[:length]), nil
 	default:
 		return "", fmt.Errorf("unexpected RESP type: %c", line[0])
+	}
+}
+
+// skipRESPResponse reads a single RESP response and discards it with minimal allocations.
+func (c *BenchmarkClient) skipRESPResponse() error {
+	line, err := c.reader.ReadSlice('\n')
+	if err != nil {
+		if err == bufio.ErrBufferFull {
+			line, err = c.reader.ReadBytes('\n')
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if len(line) < 3 {
+		return fmt.Errorf("invalid RESP response")
+	}
+
+	switch line[0] {
+	case '+', '-':
+		return nil
+	case '$':
+		length, err := parseIntLine(line[1:])
+		if err != nil {
+			return err
+		}
+		if length == -1 {
+			return nil
+		}
+		need := length + 2
+		if need <= len(c.scratch) {
+			_, err = io.ReadFull(c.reader, c.scratch[:need])
+			return err
+		}
+		// Large payload: stream-discard without allocating.
+		_, err = io.CopyN(io.Discard, c.reader, int64(need))
+		return err
+	default:
+		return fmt.Errorf("unexpected RESP type: %c", line[0])
 	}
 }
 
@@ -111,8 +200,9 @@ func (c *BenchmarkClient) GetPipeline(key string) {
 
 func (c *BenchmarkClient) ReadPipelineResponses(count int) error {
 	for i := 0; i < count; i++ {
-		_, err := c.readRESPResponse()
-		if err != nil {
+		// In pipeline benchmarks we don't need to materialize values,
+		// so read and discard responses with minimal allocations.
+		if err := c.skipRESPResponse(); err != nil {
 			return err
 		}
 	}

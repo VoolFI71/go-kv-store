@@ -92,9 +92,12 @@ func ParseArray(reader *bufio.Reader, buf []byte, args *[]string) error {
 		return fmt.Errorf("negative array count")
 	}
 
-	*args = (*args)[:0]
+	// Reuse args backing array when possible.
+	// We set len to count and assign by index to avoid append overhead.
 	if cap(*args) < count {
-		*args = make([]string, 0, count)
+		*args = make([]string, count)
+	} else {
+		*args = (*args)[:count]
 	}
 
 	for i := 0; i < count; i++ {
@@ -102,7 +105,7 @@ func ParseArray(reader *bufio.Reader, buf []byte, args *[]string) error {
 		if err != nil {
 			return err
 		}
-		*args = append(*args, arg)
+		(*args)[i] = arg
 	}
 
 	return nil
@@ -138,8 +141,19 @@ func ParseBulkString(reader *bufio.Reader, buf []byte) (string, error) {
 		return "", fmt.Errorf("negative bulk string length")
 	}
 
-	var data []byte
 	neededSize := length + 2
+
+	// Fast path: if the whole payload is already buffered, avoid copying it into our scratch buffer.
+	// We still copy into a new string (safe), but skip an extra byte-to-byte copy.
+	if peek, err := reader.Peek(neededSize); err == nil {
+		if peek[length] != '\r' || peek[length+1] != '\n' {
+			return "", fmt.Errorf("invalid bulk string terminator")
+		}
+		_, _ = reader.Discard(neededSize)
+		return string(peek[:length]), nil
+	}
+
+	var data []byte
 	if neededSize <= len(buf) {
 		data = buf[:neededSize]
 	} else {
