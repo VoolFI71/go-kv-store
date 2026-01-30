@@ -5,6 +5,7 @@ import (
 	"github.com/VoolFI71/go-kv-store/internal/resp"
 	"github.com/VoolFI71/go-kv-store/internal/storage"
 	"net"
+	"strconv"
 )
 
 func HandleConn(conn net.Conn, st storage.Storage) {
@@ -12,8 +13,8 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 	reader := bufio.NewReaderSize(conn, 64*1024)
 	writer := bufio.NewWriterSize(conn, 1024*1024)
 
-	buf := make([]byte, 64*1024)
 	args := make([]string, 0, 32)
+	cmdBuf := make([]byte, 0, 64*1024)
 
 	const maxResponsesBeforeFlush = 128
 	responsesSinceFlush := 0
@@ -28,7 +29,7 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 	}
 
 	for {
-		err := resp.ParseArray(reader, buf, &args)
+		err := resp.ParseArray(reader, &args, &cmdBuf)
 		if err != nil {
 			if err.Error() == "EOF" {
 				return
@@ -65,8 +66,8 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 				if len(args) < 3 {
 					resp.WriteError(writer, "ERR wrong number of arguments for 'SET' command")
 				} else {
-					key := args[1]
-					value := args[2]
+					key := string([]byte(args[1]))
+					value := string([]byte(args[2]))
 					st.Set(key, value)
 					resp.WriteString(writer, "OK")
 				}
@@ -95,6 +96,25 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 			}
 		}
 
+		if firstChar == 'I' || firstChar == 'i' {
+			if command == "INCR" || command == "incr" {
+				if len(args) < 2 {
+					resp.WriteError(writer, "ERR wrong number of arguments for 'INCR' command")
+				} else {
+					key := string([]byte(args[1]))
+					value, err := st.Incr(key)
+					if err != nil {
+						resp.WriteError(writer, err.Error())
+					} else {
+						resp.WriteInt(writer, value)
+					}
+				}
+				responsesSinceFlush++
+				flushIfBatchDone()
+				continue
+			}
+		}
+
 		if firstChar == 'C' || firstChar == 'c' {
 			if command == "CONFIG" || command == "config" {
 				if len(args) >= 2 && (args[1] == "GET" || args[1] == "get") {
@@ -103,6 +123,29 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 					writer.WriteString("\r\n")
 				} else {
 					resp.WriteError(writer, "ERR wrong number of arguments for 'CONFIG' command")
+				}
+				responsesSinceFlush++
+				flushIfBatchDone()
+				continue
+			}
+		}
+
+		if firstChar == 'E' || firstChar == 'e' {
+			if command == "EXPIRE" || command == "expire" {
+				if len(args) < 3 {
+					resp.WriteError(writer, "ERR wrong number of arguments for 'EXPIRE' command")
+				} else {
+					seconds, err := strconv.ParseInt(args[2], 10, 64)
+					if err != nil {
+						resp.WriteError(writer, "ERR value is not an integer or out of range")
+					} else {
+						ok := st.SetExpire(string([]byte(args[1])), seconds)
+						if ok {
+							resp.WriteInt(writer, 1)
+						} else {
+							resp.WriteInt(writer, 0)
+						}
+					}
 				}
 				responsesSinceFlush++
 				flushIfBatchDone()
