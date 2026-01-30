@@ -139,7 +139,7 @@ func HandleConn(conn net.Conn, st storage.Storage) {
 					if err != nil {
 						resp.WriteError(writer, "ERR value is not an integer or out of range")
 					} else {
-						ok := st.SetExpire(string([]byte(args[1])), seconds)
+						ok := st.SetExpire(args[1], seconds)
 						if ok {
 							resp.WriteInt(writer, 1)
 						} else {
