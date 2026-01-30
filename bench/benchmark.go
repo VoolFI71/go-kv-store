@@ -268,7 +268,7 @@ func main() {
 	pipelineKind := flag.String("pipeline-kind", "both", "pipeline kind: get|set|both")
 	pipelineOps := flag.Int("pipeline-ops", 1000000, "total ops for pipeline benchmark(s)")
 	pipelineClients := flag.Int("pipeline-clients", 10, "number of clients for pipeline benchmark(s)")
-	pipelineBatch := flag.Int("pipeline-batch", 100, "pipeline batch size")
+	pipelineBatch := flag.Int("pipeline-batch", 20000, "pipeline batch size")
 	startDelaySeconds := flag.Int("start-delay", 0, "sleep N seconds before starting (helps to attach pprof)")
 	flag.Parse()
 
@@ -345,16 +345,16 @@ func main() {
 	results2 := runBenchmark("SET (10 клиентов, 100000 операций)", 100000, 10, setOp)
 	printResults(results2)
 
-	results3 := runBenchmark("GET (1 клиент, 1000000 операций)", 1000000, 1, getOp)
+	results3 := runBenchmark("GET (1 клиент, 100000 операций)", 100000, 1, getOp)
 	printResults(results3)
 
-	results4 := runBenchmark("GET (10 клиентов, 1000000 операций)", 1000000, 10, getOp)
+	results4 := runBenchmark("GET (10 клиентов, 100000 операций)", 100000, 10, getOp)
 	printResults(results4)
 
-	results5 := runBenchmarkPipeline("SET Pipeline", 1000000, 10, 100, setOpPipeline, nil)
+	results5 := runBenchmarkPipeline("SET Pipeline", 1000000, 10, 20000, setOpPipeline, nil)
 	printResults(results5)
 
-	results6 := runBenchmarkPipeline("GET Pipeline", 1000000, 10, 100, nil, getOpPipeline)
+	results6 := runBenchmarkPipeline("GET Pipeline", 1000000, 10, 20000, nil, getOpPipeline)
 	printResults(results6)
 
 	fmt.Printf("\n=== Смешанная нагрузка (50%% SET, 50%% GET) ===\n")
