@@ -263,11 +263,12 @@ func printResults(results BenchmarkResults) {
 	fmt.Printf("    Максимальная:   %10v\n", results.MaxLatency)
 }
 
+
 func main() {
 	pipelineOnly := flag.Bool("pipeline-only", false, "run only pipeline benchmark(s) (useful for profiling)")
 	pipelineKind := flag.String("pipeline-kind", "both", "pipeline kind: get|set|both")
-	pipelineOps := flag.Int("pipeline-ops", 1000000, "total ops for pipeline benchmark(s)")
-	pipelineClients := flag.Int("pipeline-clients", 10, "number of clients for pipeline benchmark(s)")
+	pipelineOps := flag.Int("pipeline-ops", 5000000, "total ops for pipeline benchmark(s)")
+	pipelineClients := flag.Int("pipeline-clients", 8, "number of clients for pipeline benchmark(s)")
 	pipelineBatch := flag.Int("pipeline-batch", 20000, "pipeline batch size")
 	startDelaySeconds := flag.Int("start-delay", 0, "sleep N seconds before starting (helps to attach pprof)")
 	flag.Parse()
@@ -342,38 +343,53 @@ func main() {
 	results1 := runBenchmark("SET (1 клиент, 100000 операций)", 100000, 1, setOp)
 	printResults(results1)
 
-	results2 := runBenchmark("SET (10 клиентов, 100000 операций)", 100000, 10, setOp)
+	results2 := runBenchmark("SET (10 клиентов, 100000000 операций)", 1000000, 10, setOp)
 	printResults(results2)
 
 	results3 := runBenchmark("GET (1 клиент, 100000 операций)", 100000, 1, getOp)
 	printResults(results3)
 
-	results4 := runBenchmark("GET (10 клиентов, 100000 операций)", 100000, 10, getOp)
+	results4 := runBenchmark("GET (10 клиентов, 100000000 операций)", 1000000, 10, getOp)
 	printResults(results4)
 
-	results5 := runBenchmarkPipeline("SET Pipeline", 1000000, 10, 20000, setOpPipeline, nil)
+	results5 := runBenchmarkPipeline("SET Pipeline", 10000000, 10, 20000, setOpPipeline, nil)
 	printResults(results5)
 
-	results6 := runBenchmarkPipeline("GET Pipeline", 1000000, 10, 20000, nil, getOpPipeline)
+	results6 := runBenchmarkPipeline("GET Pipeline", 10000000, 10, 20000, nil, getOpPipeline)
 	printResults(results6)
 
 	fmt.Printf("\n=== Смешанная нагрузка (50%% SET, 50%% GET) ===\n")
 	fmt.Printf("Операций: 200000, Клиентов: 10\n")
 
-	var mixedOps int64
-	var mixedErrors int64
-	var mixedLatency int64
-	var mixedMinLatency int64 = 1e18
-	var mixedMaxLatency int64
-	mixedLatencies := make([]int64, 0, 200000)
 	mixedStart := time.Now()
 	var mixedWg sync.WaitGroup
-	var mixedMu sync.Mutex
+
+	type localStats struct {
+		ops     int64
+		errors  int64
+		latency int64
+		min     int64
+		max     int64
+		samples []int64
+	}
 
 	const mixedTotalOps = 200000
 	const mixedClients = 10
+	const sampleCap = 10000
+	stats := make([]localStats, mixedClients)
 	opsPerClient := mixedTotalOps / mixedClients
 	extraOps := mixedTotalOps % mixedClients
+
+	getKeys := make([]string, 10000)
+	for i := 0; i < len(getKeys); i++ {
+		getKeys[i] = fmt.Sprintf("bench_key_%d", i)
+	}
+	setKeys := make([]string, mixedTotalOps)
+	setValues := make([]string, mixedTotalOps)
+	for i := 0; i < mixedTotalOps; i++ {
+		setKeys[i] = fmt.Sprintf("mixed_key_%d", i)
+		setValues[i] = fmt.Sprintf("mixed_value_%d", i)
+	}
 
 	for i := 0; i < mixedClients; i++ {
 		mixedWg.Add(1)
@@ -385,6 +401,10 @@ func main() {
 				return
 			}
 			defer client.Close()
+
+			local := &stats[clientID]
+			local.min = 1e18
+			local.samples = make([]int64, 0, sampleCap)
 
 			myOps := opsPerClient
 			startIdx := clientID*opsPerClient + min(clientID, extraOps)
@@ -398,31 +418,29 @@ func main() {
 				var err error
 
 				if idx%2 == 0 {
-					key := fmt.Sprintf("mixed_key_%d", idx)
-					value := fmt.Sprintf("mixed_value_%d", idx)
-					err = client.Set(key, value)
+					err = client.Set(setKeys[idx], setValues[idx])
 				} else {
-					key := fmt.Sprintf("bench_key_%d", idx%10000)
-					_, err = client.Get(key)
+					_, err = client.Get(getKeys[idx%len(getKeys)])
 				}
 
 				latency := time.Since(opStart).Nanoseconds()
-
-				mixedMu.Lock()
-				if latency < mixedMinLatency {
-					mixedMinLatency = latency
-				}
-				if latency > mixedMaxLatency {
-					mixedMaxLatency = latency
-				}
-				mixedLatency += latency
-				mixedLatencies = append(mixedLatencies, latency)
-				mixedMu.Unlock()
-
 				if err != nil {
-					atomic.AddInt64(&mixedErrors, 1)
+					local.errors++
 				} else {
-					atomic.AddInt64(&mixedOps, 1)
+					local.ops++
+				}
+
+				if latency < local.min {
+					local.min = latency
+				}
+				if latency > local.max {
+					local.max = latency
+				}
+				local.latency += latency
+				if len(local.samples) < sampleCap {
+					local.samples = append(local.samples, latency)
+				} else {
+					local.samples[j%sampleCap] = latency
 				}
 			}
 		}(i)
@@ -430,6 +448,27 @@ func main() {
 
 	mixedWg.Wait()
 	mixedDuration := time.Since(mixedStart)
+
+	var mixedOps int64
+	var mixedErrors int64
+	var mixedLatency int64
+	var mixedMinLatency int64 = 1e18
+	var mixedMaxLatency int64
+	combinedSamples := make([]int64, 0, mixedClients*sampleCap)
+
+	for i := range stats {
+		mixedOps += stats[i].ops
+		mixedErrors += stats[i].errors
+		mixedLatency += stats[i].latency
+		if stats[i].min < mixedMinLatency {
+			mixedMinLatency = stats[i].min
+		}
+		if stats[i].max > mixedMaxLatency {
+			mixedMaxLatency = stats[i].max
+		}
+		combinedSamples = append(combinedSamples, stats[i].samples...)
+	}
+
 	mixedOpsPerSecond := float64(mixedOps) / mixedDuration.Seconds()
 	mixedAvgLatency := time.Duration(0)
 	if mixedOps > 0 {
@@ -437,14 +476,12 @@ func main() {
 	}
 
 	var mixedP50, mixedP95, mixedP99 time.Duration
-	if len(mixedLatencies) > 0 {
-		sort.Slice(mixedLatencies, func(i, j int) bool { return mixedLatencies[i] < mixedLatencies[j] })
-		if len(mixedLatencies) > 0 {
-			mixedP50 = time.Duration(mixedLatencies[len(mixedLatencies)*50/100])
-			if len(mixedLatencies) > 1 {
-				mixedP95 = time.Duration(mixedLatencies[len(mixedLatencies)*95/100])
-				mixedP99 = time.Duration(mixedLatencies[len(mixedLatencies)*99/100])
-			}
+	if len(combinedSamples) > 0 {
+		sort.Slice(combinedSamples, func(i, j int) bool { return combinedSamples[i] < combinedSamples[j] })
+		mixedP50 = time.Duration(combinedSamples[len(combinedSamples)*50/100])
+		if len(combinedSamples) > 1 {
+			mixedP95 = time.Duration(combinedSamples[len(combinedSamples)*95/100])
+			mixedP99 = time.Duration(combinedSamples[len(combinedSamples)*99/100])
 		}
 	}
 
