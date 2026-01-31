@@ -41,7 +41,7 @@ flowchart LR
     Client[Client] -->|RESP / Pipelining| Gnet[gnet Event-Loop]
     Gnet --> Parser[Zero-Copy RESP Parser]
     Parser --> Hash[xxHash 64]
-    Hash --> Shards[Sharded Storage (map[uint64]*entry)]
+    Hash --> Shards[Sharded Storage (map uint64 entry)]
     Shards --> TTL[TTL + Janitor]
     Shards --> Resp[RESP Response Builder]
     Resp --> Gnet
@@ -56,9 +56,9 @@ flowchart LR
     C --> D[12M]
     D --> E[14M+]
     A:::stage -->|Pipelining| B
-    B:::stage -->|Batching + gnet| C
-    C:::stage -->|Zero-Copy + xxHash| D
-    D:::stage -->|GOGC + Prealloc| E
+    B:::stage -->|Batching + Zero-Copy| C
+    C:::stage -->|xxHash + uint64| D
+    D:::stage -->|gnet + GOGC + Prealloc| E
     classDef stage fill:#0b1f2a,stroke:#2c7,stroke-width:1px,color:#cfe;
 ```
 
@@ -82,13 +82,12 @@ flowchart LR
 Решение:
 - Увеличение batch до 20,000.
 - Smart Flush: запись в сеть только при заполнении буфера или когда входящий поток иссяк.
-- Переход на gnet (Event-Loop вместо goroutine-per-conn).
+- Zero-Copy парсинг RESP, чтобы убрать лишние аллокации на горячем пути.
 Результат: быстрый рост до 5M RPS.
 
 ### Этап 3: Zero-Copy & Low-Level Tuning (5M → 12M RPS)
 Проблема: до 40% CPU уходило в GC и хеширование.  
 Решение:
-- Zero-Copy Parsing: GET/парсинг без копирования строк.
 - xxHash + uint64: `map[string]` → `map[uint64]`, хеш считается один раз.
 - Шардирование для снятия lock contention.
 Результат: стабильные 10–12M RPS.
@@ -96,6 +95,7 @@ flowchart LR
 ### Этап 4: Taming the Runtime (12M → 14.1M RPS)
 Проблема: просадки из-за агрессивного GC и grow мап.  
 Решение:
+- Переход на gnet (Event-Loop вместо goroutine-per-conn).
 - GOGC=1000 (редкий GC).
 - Pre-allocation мап.
 Результат: стабильная линия производительности в районе 14M.
@@ -109,7 +109,7 @@ flowchart LR
 
 **Zero‑Copy парсинг (борьба с аллокациями)**
 - Проблема: создание строк при парсинге давало постоянный GC‑шум.
-- Что сделал: zero‑copy парсер для gnet (`resp_bytes.go`) и работа с буферами напрямую.
+- Что сделал: zero‑copy парсер RESP и работа с буферами напрямую; позже перенёс его в gnet‑путь.
 - Результат: парсинг почти исчез из профиля, GC стал заметно легче.
 
 **Batching + Smart Flush (борьба с syscalls)**
