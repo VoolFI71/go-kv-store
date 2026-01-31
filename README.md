@@ -41,7 +41,7 @@ flowchart LR
     Client[Client] -->|RESP / Pipelining| Gnet[gnet Event-Loop]
     Gnet --> Parser[Zero-Copy RESP Parser]
     Parser --> Hash[xxHash 64]
-    Hash --> Shards[Sharded Storage (map uint64 entry)]
+    Hash --> Shards[Sharded Storage]
     Shards --> TTL[TTL + Janitor]
     Shards --> Resp[RESP Response Builder]
     Resp --> Gnet
